@@ -608,7 +608,7 @@ export default function Navbar() {
           </div>
           <div className="hidden sm:flex items-center gap-1.5 ml-2 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/25">
             <Wifi size={10} className="text-emerald-400" />
-            <span className="text-emerald-400 text-xs font-medium">API Ready</span>
+            <span className="text-emerald-400 text-xs font-medium">Live Data</span>
           </div>
         </motion.div>
         <div className="flex items-center gap-4">
@@ -825,7 +825,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown, MapPin, Search } from 'lucide-react';
 import { PROVINCES } from '../data/weatherData';
 
-export default function ProvinceSelector({ value, onChange }) {
+export default function ProvinceSelector({ value, onChange, onHover }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const selected = PROVINCES.find(p => p.id === value);
@@ -903,6 +903,7 @@ export default function ProvinceSelector({ value, onChange }) {
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.03 }}
+                    onMouseEnter={() => onHover && onHover(p.id)}
                     onClick={() => select(p.id)}
                     className={"w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all " + (value === p.id ? 'bg-blue-500/20 border border-blue-500/30' : 'hover:bg-white/6 border border-transparent')}
                   >
@@ -1348,9 +1349,9 @@ import TodayHighlight from './TodayHighlight';
 import ForecastCard from './ForecastCard';
 import WeatherChart from './WeatherChart';
 
-export default function WeatherDashboard({ provinceId, onBack }) {
+export default function WeatherDashboard({ provinceId, onBack, weatherOverride }) {
   const [activeDay, setActiveDay] = useState(0);
-  const weather = WEATHER_DATA[provinceId];
+  const weather = weatherOverride || WEATHER_DATA[provinceId];
   const province = PROVINCES.find(p => p.id === provinceId);
 
   if (!weather || !province) return null;
@@ -1495,9 +1496,10 @@ export default function Footer() {
 // ============================================================
 write(
   "src/App.jsx",
-  `import React, { useState, useRef } from 'react';
+  `import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { WEATHER_DATA } from './data/weatherData';
+import { fetchProvinceWeather, fetchAirQuality, transformOpenMeteo } from './services/weatherApi';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import ProvinceSelector from './components/ProvinceSelector';
@@ -1509,24 +1511,40 @@ import Footer from './components/Footer';
 export default function App() {
   const [selectedProvince, setSelectedProvince] = useState('');
   const [displayProvince, setDisplayProvince] = useState('');
+  const [weatherCache, setWeatherCache] = useState({});
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
   const dashboardRef = useRef(null);
 
-  const currentCondition = displayProvince && WEATHER_DATA[displayProvince]
-    ? WEATHER_DATA[displayProvince].forecast[0].condition
-    : 'partly_cloudy';
+  const currentWeather = displayProvince ? (weatherCache[displayProvince] || WEATHER_DATA[displayProvince]) : null;
+  const currentCondition = currentWeather?.forecast?.[0]?.condition || 'partly_cloudy';
 
-  const handleProvinceChange = (id) => {
+  const loadWeather = useCallback(async (id) => {
+    if (weatherCache[id]) return;
+    try {
+      const [raw, aq] = await Promise.all([
+        fetchProvinceWeather(id),
+        fetchAirQuality(id),
+      ]);
+      const transformed = transformOpenMeteo(raw, aq);
+      setWeatherCache(prev => ({ ...prev, [id]: transformed }));
+    } catch (err) {
+      console.warn('API failed, using mock data:', err.message);
+      // Falls back to WEATHER_DATA mock automatically
+    }
+  }, [weatherCache]);
+
+  const handleProvinceChange = async (id) => {
     if (id === displayProvince) return;
     setSelectedProvince(id);
     setIsLoading(true);
+    setError(null);
+    await loadWeather(id);
+    setDisplayProvince(id);
+    setIsLoading(false);
     setTimeout(() => {
-      setDisplayProvince(id);
-      setIsLoading(false);
-      setTimeout(() => {
-        dashboardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 100);
-    }, 1200);
+      dashboardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
   };
 
   const handleBack = () => {
@@ -1538,6 +1556,9 @@ export default function App() {
   const handleExplore = () => {
     document.getElementById('explore')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
+
+  // Prefetch the weather for a province on hover (nice UX touch)
+  const handleProvinceHover = (id) => { if (id) loadWeather(id); };
 
   return (
     <div className="min-h-screen text-white">
@@ -1563,7 +1584,7 @@ export default function App() {
               transition={{ delay: 0.2 }}
               className="pb-20"
             >
-              <ProvinceSelector value={selectedProvince} onChange={handleProvinceChange} />
+              <ProvinceSelector value={selectedProvince} onChange={handleProvinceChange} onHover={handleProvinceHover} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -1579,7 +1600,12 @@ export default function App() {
         <div ref={dashboardRef}>
           <AnimatePresence mode="wait">
             {displayProvince && !isLoading && (
-              <WeatherDashboard key={displayProvince} provinceId={displayProvince} onBack={handleBack} />
+              <WeatherDashboard
+                key={displayProvince}
+                provinceId={displayProvince}
+                weatherOverride={weatherCache[displayProvince]}
+                onBack={handleBack}
+              />
             )}
           </AnimatePresence>
         </div>
@@ -1616,19 +1642,12 @@ write(
 write(
   "src/services/weatherApi.js",
   `/**
- * Weather API Integration - Future Ready
- * Replace mock data with real API calls here.
- *
- * Supported APIs:
- *  - OpenWeatherMap: https://openweathermap.org/api
- *  - WeatherAPI: https://www.weatherapi.com/
- *  - Open-Meteo (free): https://open-meteo.com/
+ * Open-Meteo Weather API Integration
+ * 100% FREE — no API key required
+ * Docs: https://open-meteo.com/en/docs
  */
 
-const API_KEY = import.meta.env.VITE_WEATHER_API_KEY || '';
-const BASE_URL = import.meta.env.VITE_WEATHER_API_URL || 'https://api.weatherapi.com/v1';
-
-const PROVINCE_COORDS = {
+export const PROVINCE_COORDS = {
   western:       { lat: 6.9271,  lon: 79.8612, name: 'Colombo' },
   central:       { lat: 7.2906,  lon: 80.6337, name: 'Kandy' },
   southern:      { lat: 6.0535,  lon: 80.2210, name: 'Galle' },
@@ -1640,69 +1659,163 @@ const PROVINCE_COORDS = {
   sabaragamuwa:  { lat: 6.6828,  lon: 80.3992, name: 'Ratnapura' },
 };
 
-export async function fetchForecast(provinceId) {
-  if (!API_KEY) {
-    // Return null to signal using mock data
-    return null;
-  }
+// WMO weather code → app condition string
+function wmoToCondition(code) {
+  if (code === 0) return 'sunny';
+  if ([1, 2].includes(code)) return 'partly_cloudy';
+  if (code === 3) return 'cloudy';
+  if ([45, 48].includes(code)) return 'foggy';
+  if ([51, 53, 55, 56, 57].includes(code)) return 'drizzle';
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return 'rainy';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return 'cloudy'; // snow (rare in SL)
+  if ([95, 96, 99].includes(code)) return 'thunderstorm';
+  return 'partly_cloudy';
+}
+
+// WMO code → human readable description
+function wmoToDesc(code) {
+  const map = {
+    0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+    45: 'Foggy', 48: 'Icy fog',
+    51: 'Light drizzle', 53: 'Moderate drizzle', 55: 'Dense drizzle',
+    61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain',
+    80: 'Slight showers', 81: 'Moderate showers', 82: 'Violent showers',
+    95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Heavy thunderstorm',
+  };
+  return map[code] || 'Variable conditions';
+}
+
+// Estimate feels-like from temp + humidity (Steadman approximation)
+function feelsLike(tempC, humidity) {
+  if (tempC < 27) return tempC;
+  const hi =
+    -8.78469475556 +
+    1.61139411 * tempC +
+    2.33854883889 * humidity -
+    0.14611605 * tempC * humidity -
+    0.012308094 * tempC * tempC -
+    0.0164248277778 * humidity * humidity +
+    0.002211732 * tempC * tempC * humidity +
+    0.00072546 * tempC * humidity * humidity -
+    0.000003582 * tempC * tempC * humidity * humidity;
+  return Math.round(hi);
+}
+
+export async function fetchProvinceWeather(provinceId) {
   const coords = PROVINCE_COORDS[provinceId];
   if (!coords) throw new Error('Unknown province: ' + provinceId);
 
-  const url = BASE_URL + '/forecast.json?key=' + API_KEY + '&q=' + coords.lat + ',' + coords.lon + '&days=7&aqi=yes';
+  const params = new URLSearchParams({
+    latitude: coords.lat,
+    longitude: coords.lon,
+    daily: [
+      'temperature_2m_max',
+      'temperature_2m_min',
+      'precipitation_probability_max',
+      'windspeed_10m_max',
+      'weathercode',
+      'relative_humidity_2m_max',
+      'apparent_temperature_max',
+      'uv_index_max',
+      'visibility_max',
+      'sunrise',
+      'sunset',
+      'surface_pressure_mean',
+      'winddirection_10m_dominant',
+    ].join(','),
+    timezone: 'Asia/Colombo',
+    forecast_days: 7,
+  });
+
+  const url = 'https://api.open-meteo.com/v1/forecast?' + params.toString();
   const res = await fetch(url);
-  if (!res.ok) throw new Error('Weather API error: ' + res.status);
+  if (!res.ok) throw new Error('Open-Meteo API error: ' + res.status);
   return res.json();
 }
 
-export function transformApiResponse(apiData) {
-  // Transform WeatherAPI.com response to app's data format
-  return {
-    airQuality: {
-      aqi: apiData.current.air_quality?.['us-epa-index'] * 25 || 50,
-      label: 'Live',
-      color: '#10b981',
-    },
-    sunrise: apiData.forecast.forecastday[0].astro.sunrise,
-    sunset:  apiData.forecast.forecastday[0].astro.sunset,
-    forecast: apiData.forecast.forecastday.map((d, i) => ({
-      day: i === 0 ? 'Today' : new Date(d.date).toLocaleDateString('en-US', { weekday: 'short' }),
-      high: Math.round(d.day.maxtemp_c),
-      low:  Math.round(d.day.mintemp_c),
-      feelsLike: Math.round(d.day.maxtemp_c + 2),
-      humidity: d.day.avghumidity,
-      wind: Math.round(d.day.maxwind_kph),
-      windDir: 'SW',
-      rain: d.day.daily_chance_of_rain,
-      condition: mapConditionCode(d.day.condition.code),
-      desc: d.day.condition.text,
-      uv: Math.round(d.day.uv),
-      vis: Math.round(d.day.avgvis_km),
-      pressure: 1010,
-    })),
-  };
+// Fetch Air Quality from Open-Meteo AQ API (also free)
+export async function fetchAirQuality(provinceId) {
+  const coords = PROVINCE_COORDS[provinceId];
+  if (!coords) return { aqi: 50, label: 'Moderate', color: '#f59e0b' };
+
+  try {
+    const params = new URLSearchParams({
+      latitude: coords.lat,
+      longitude: coords.lon,
+      hourly: 'us_aqi',
+      timezone: 'Asia/Colombo',
+      forecast_days: 1,
+    });
+    const res = await fetch('https://air-quality-api.open-meteo.com/v1/air-quality?' + params.toString());
+    if (!res.ok) return { aqi: 50, label: 'Moderate', color: '#f59e0b' };
+    const data = await res.json();
+    const values = (data.hourly?.us_aqi || []).filter(v => v !== null);
+    const avg = values.length ? Math.round(values.slice(0, 8).reduce((a, b) => a + b, 0) / Math.min(8, values.length)) : 50;
+    return getAQIInfo(avg);
+  } catch {
+    return { aqi: 50, label: 'Moderate', color: '#f59e0b' };
+  }
 }
 
-function mapConditionCode(code) {
-  if ([1000].includes(code)) return 'sunny';
-  if ([1003, 1006].includes(code)) return 'partly_cloudy';
-  if ([1009].includes(code)) return 'cloudy';
-  if ([1063, 1180, 1183, 1186, 1189, 1192, 1195].includes(code)) return 'rainy';
-  if ([1087, 1273, 1276, 1279, 1282].includes(code)) return 'thunderstorm';
-  if ([1150, 1153, 1168, 1171].includes(code)) return 'drizzle';
-  if ([1030, 1135, 1147].includes(code)) return 'foggy';
-  return 'partly_cloudy';
+function getAQIInfo(aqi) {
+  if (aqi <= 50)  return { aqi, label: 'Good',           color: '#10b981' };
+  if (aqi <= 100) return { aqi, label: 'Moderate',       color: '#f59e0b' };
+  if (aqi <= 150) return { aqi, label: 'Unhealthy (S)',  color: '#f97316' };
+  if (aqi <= 200) return { aqi, label: 'Unhealthy',      color: '#ef4444' };
+  return               { aqi, label: 'Very Unhealthy',   color: '#8b5cf6' };
+}
+
+// Degrees to compass direction
+function degToCompass(deg) {
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+// Format time "2024-01-01T06:15" → "06:15"
+function fmtTime(isoStr) {
+  if (!isoStr) return '--:--';
+  return isoStr.slice(11, 16);
+}
+
+export function transformOpenMeteo(data, aq) {
+  const d = data.daily;
+  const days = d.time.map((date, i) => {
+    const label = i === 0 ? 'Today' : new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+    const temp = Math.round(d.temperature_2m_max[i]);
+    const hum  = d.relative_humidity_2m_max[i] ?? 70;
+    return {
+      day:       label,
+      high:      temp,
+      low:       Math.round(d.temperature_2m_min[i]),
+      feelsLike: d.apparent_temperature_max?.[i] != null ? Math.round(d.apparent_temperature_max[i]) : feelsLike(temp, hum),
+      humidity:  hum,
+      wind:      Math.round(d.windspeed_10m_max[i]),
+      windDir:   degToCompass(d.winddirection_10m_dominant?.[i] ?? 225),
+      rain:      d.precipitation_probability_max[i] ?? 0,
+      condition: wmoToCondition(d.weathercode[i]),
+      desc:      wmoToDesc(d.weathercode[i]),
+      uv:        Math.round(d.uv_index_max?.[i] ?? 6),
+      vis:       Math.round((d.visibility_max?.[i] ?? 10000) / 1000),
+      pressure:  Math.round(d.surface_pressure_mean?.[i] ?? 1010),
+    };
+  });
+
+  return {
+    airQuality: aq,
+    sunrise:    fmtTime(d.sunrise?.[0]),
+    sunset:     fmtTime(d.sunset?.[0]),
+    forecast:   days,
+  };
 }
 `,
 );
 
 write(
   ".env.example",
-  `# Weather API Integration
-# Copy this to .env and fill in your API key
-
-VITE_WEATHER_API_KEY=your_api_key_here
-VITE_WEATHER_API_URL=https://api.weatherapi.com/v1
-`,
+  `# Open-Meteo is 100% free — no API key needed!
+# App will automatically fetch live data from https://open-meteo.com
+# Falls back to mock data if API is unreachable.
+`
 );
 
 console.log("\n\u2705  All files created successfully!\n");
