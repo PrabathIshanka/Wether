@@ -1,88 +1,122 @@
-import React, { useState, useRef } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { WEATHER_DATA } from './data/weatherData';
-import Navbar from './components/Navbar';
-import Hero from './components/Hero';
-import ProvinceSelector from './components/ProvinceSelector';
-import WeatherBackground from './components/WeatherBackground';
-import WeatherDashboard from './components/WeatherDashboard';
-import LoadingState from './components/LoadingState';
-import Footer from './components/Footer';
+import React, { useState, useRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useWeather } from "./hooks/useWeather";
+import Navbar from "./components/Navbar";
+import Hero from "./components/Hero";
+import ProvinceSelector from "./components/ProvinceSelector";
+import WeatherBackground from "./components/WeatherBackground";
+import WeatherDashboard from "./components/WeatherDashboard";
+import LoadingState from "./components/LoadingState";
+import Footer from "./components/Footer";
 
 export default function App() {
-  const [selectedProvince, setSelectedProvince] = useState('');
-  const [displayProvince, setDisplayProvince] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [selectedProvince, setSelectedProvince] = useState("");
+  const [displayProvince, setDisplayProvince] = useState("");
   const dashboardRef = useRef(null);
 
-  const currentCondition = displayProvince && WEATHER_DATA[displayProvince]
-    ? WEATHER_DATA[displayProvince].forecast[0].condition
-    : 'partly_cloudy';
+  const { weather, isLoading, isLive, error } = useWeather(selectedProvince);
+
+  // Show dashboard once data is ready
+  const showDashboard = displayProvince && weather && !isLoading;
+
+  const currentCondition = weather?.forecast?.[0]?.condition ?? "partly_cloudy";
 
   const handleProvinceChange = (id) => {
-    if (id === displayProvince) return;
+    if (id === selectedProvince && showDashboard) return;
     setSelectedProvince(id);
-    setIsLoading(true);
-    setTimeout(() => {
-      setDisplayProvince(id);
-      setIsLoading(false);
-      setTimeout(() => {
-        dashboardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 100);
-    }, 1200);
+    setDisplayProvince(""); // hide old dashboard while loading
+    // After data loads, App re-renders and we set displayProvince
   };
 
+  // Once weather arrives, reveal the dashboard
+  React.useEffect(() => {
+    if (weather && selectedProvince && !isLoading) {
+      setDisplayProvince(selectedProvince);
+      setTimeout(() => {
+        dashboardRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 150);
+    }
+  }, [weather, isLoading, selectedProvince]);
+
   const handleBack = () => {
-    setDisplayProvince('');
-    setSelectedProvince('');
-    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
+    setDisplayProvince("");
+    setSelectedProvince("");
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 100);
   };
 
   const handleExplore = () => {
-    document.getElementById('explore')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document
+      .getElementById("explore")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   return (
-    <div className="min-h-screen text-white">
+    <div className='min-h-screen text-white'>
       <WeatherBackground condition={currentCondition} />
       <Navbar />
 
-      <AnimatePresence mode="wait">
-        {!displayProvince && !isLoading && (
-          <motion.div key="hero" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -20 }}>
+      <AnimatePresence mode='wait'>
+        {!showDashboard && !isLoading && (
+          <motion.div
+            key='hero'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, y: -20 }}
+          >
             <Hero onExplore={handleExplore} />
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className={displayProvince ? 'pt-24' : ''}>
-        <AnimatePresence mode="wait">
-          {!displayProvince && !isLoading && (
+      <div className={showDashboard ? "pt-24" : ""}>
+        <AnimatePresence mode='wait'>
+          {!showDashboard && !isLoading && (
             <motion.div
-              key="selector"
+              key='selector'
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ delay: 0.2 }}
-              className="pb-20"
+              className='pb-20'
             >
-              <ProvinceSelector value={selectedProvince} onChange={handleProvinceChange} />
+              <ProvinceSelector
+                value={selectedProvince}
+                onChange={handleProvinceChange}
+              />
             </motion.div>
           )}
         </AnimatePresence>
 
         <AnimatePresence>
           {isLoading && (
-            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div
+              key='loading'
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
               <LoadingState />
             </motion.div>
           )}
         </AnimatePresence>
 
+        {error && !isLoading && (
+          <div className='text-center py-16 text-red-400 text-sm'>{error}</div>
+        )}
+
         <div ref={dashboardRef}>
-          <AnimatePresence mode="wait">
-            {displayProvince && !isLoading && (
-              <WeatherDashboard key={displayProvince} provinceId={displayProvince} onBack={handleBack} />
+          <AnimatePresence mode='wait'>
+            {showDashboard && (
+              <WeatherDashboard
+                key={displayProvince}
+                provinceId={displayProvince}
+                weather={weather}
+                isLive={isLive}
+                onBack={handleBack}
+              />
             )}
           </AnimatePresence>
         </div>
